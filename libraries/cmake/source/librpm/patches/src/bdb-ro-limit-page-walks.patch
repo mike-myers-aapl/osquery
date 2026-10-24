@@ -1,0 +1,98 @@
+diff --git a/lib/backend/bdb_ro.c b/lib/backend/bdb_ro.c
+index 695ef78e3..b162b9e5f 100644
+--- a/lib/backend/bdb_ro.c
++++ b/lib/backend/bdb_ro.c
+@@ -57,6 +57,7 @@ struct bdb_cur {
+ 
+     /* hash */
+     unsigned int bucket;	/* current bucket */
++    unsigned int walkpages;	/* pages read since the last lookup */
+ };
+ 
+ 
+@@ -146,6 +147,20 @@ static int bdb_getpage(struct bdb_db *db, unsigned char *page, unsigned int page
+     return 0;
+ }
+ 
++/*
++ * Read the next page of a page walk. A walk that has read more pages than the
++ * database has must be following links that form a cycle, which would loop
++ * forever, so fail it as damaged.
++ */
++static int cur_walkpage(struct bdb_cur *cur, unsigned int pageno)
++{
++    if (++cur->walkpages > cur->db->lastpage) {
++	rpmlog(RPMLOG_ERR, "bdb_ro: page links form a cycle, the database may be damaged\n");
++	return -1;
++    }
++    return bdb_getpage(cur->db, cur->page, pageno);
++}
++
+ static void bdb_close(struct bdb_db *db)
+ {
+     if (db->fd >= 0)
+@@ -216,6 +231,7 @@ static int ovfl_get(struct bdb_cur *cur, struct bdb_kv *kv, struct bdb_kv *ov, u
+     unsigned int pageno = pagenolen[0];
+     unsigned int len = pagenolen[1];
+     unsigned int plen;
++    unsigned int pages = 0;
+     unsigned char *p;
+ 
+     if (len == 0)
+@@ -231,12 +247,16 @@ static int ovfl_get(struct bdb_cur *cur, struct bdb_kv *kv, struct bdb_kv *ov, u
+ 	cur->ovpage = xmalloc(cur->db->pagesize);
+     p = ov->kv;
+     while (len > 0) {
++	/* An overflow chain cannot be longer than the database. */
++	if (++pages > cur->db->lastpage)
++	    return -1;
+ 	if (bdb_getpage(cur->db, cur->ovpage, pageno))
+ 	    return -1;
+ 	if (cur->ovpage[25] != 7)
+ 	    return -1;
+ 	plen = *(uint16_t *)(cur->ovpage + 22);
+-	if (plen + 26 > cur->db->pagesize || plen > len)
++	/* A page without data would never finish the value. */
++	if (plen == 0 || plen + 26 > cur->db->pagesize || plen > len)
+ 	    return -1;
+ 	memcpy(p, cur->ovpage + 26, plen);
+ 	p += plen;
+@@ -274,7 +294,8 @@ static int hash_lookup(struct bdb_cur *cur, const unsigned char *key, unsigned i
+ 	bucket &= cur->db->lowmask;
+     cur->bucket = bucket;
+     pg = hash_bucket_to_page(cur->db, bucket);
+-    if (bdb_getpage(cur->db, cur->page, pg))
++    cur->walkpages = 0;
++    if (cur_walkpage(cur, pg))
+ 	return -1;
+     if (cur->page[25] != 8 && cur->page[25] != 13 && cur->page[25] != 2)
+ 	return -1;
+@@ -321,7 +342,7 @@ static int hash_next(struct bdb_cur *cur)
+ 		    return 1;
+ 		pg = hash_bucket_to_page(cur->db, ++cur->bucket);
+ 	    }
+-	    if (bdb_getpage(cur->db, cur->page, pg))
++	    if (cur_walkpage(cur, pg))
+ 		return -1;
+ 	    if (cur->page[25] != 8 && cur->page[25] != 13 && cur->page[25] != 2)
+ 		return -1;
+@@ -369,8 +390,9 @@ static int btree_lookup(struct bdb_cur *cur, const unsigned char *key, unsigned
+ 
+     cur->state = -1;
+     pg = cur->db->root;
++    cur->walkpages = 0;
+     for (;;) {
+-	if (bdb_getpage(cur->db, cur->page, pg))
++	if (cur_walkpage(cur, pg))
+ 	    return -1;
+ 	if (cur->page[25] == 5)
+ 	    break;		/* found leaf page */
+@@ -450,7 +472,7 @@ static int btree_next(struct bdb_cur *cur)
+ 	    pg = *(uint32_t *)(cur->page + 16);
+ 	    if (cur->islookup || !pg)
+ 	      return 1;
+-	    if (bdb_getpage(cur->db, cur->page, pg))
++	    if (cur_walkpage(cur, pg))
+ 		return -1;
+ 	    if (cur->page[25] != 5)
+ 		return -1;

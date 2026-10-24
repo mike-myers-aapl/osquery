@@ -89,9 +89,10 @@ Make sure that the `config.h` file does not have defined `HAVE_SECURE_GETENV`, `
 The build time patch is required to have the configure.ac script work with the version of GETTEXT it's present on CentOS 6.
 Furthermore, librpm has removed the ability to disable the use of Lua, which is not useful for osquery, since we only want to read, so we have to patch it out.
 
-Finally there are two additional patches which are instead applied when we build osquery.
+Finally there are additional patches which are instead applied when we build osquery.
 One, the `remove-lua.patch`, which only touches source code, is a part of the bigger build patch. So when having to update this first generate the build patch, then remove the parts from it that touch build files and the result is this patch.
 
 To regenerate the `centos6-support-and-remove-lua.patch`, make all the necessary changes to the build files and then use `git diff -- '*.ac' '*.am'`.
 To regenerate the `remove-lua.patch` make all the necessary changes to the source code to remove lua and then use `git diff -- '*.c' '*.h'`.
 To regenerate the `open-only-pkgs.patch`, the idea is to only open the Packages database, which in the current version can be done by setting the `justPkgs` to 1.
+The `bdb-ro-limit-page-walks.patch` makes the read-only BerkeleyDB backend (`lib/backend/bdb_ro.c`) fail, instead of looping forever, when a damaged database has page links that form a cycle. It counts the pages each cursor walk and overflow chain reads, and treats reading more pages than the database contains as damage. It also rejects overflow pages that hold no data. To regenerate it, make those changes and then use `git diff -- lib/backend/bdb_ro.c`.

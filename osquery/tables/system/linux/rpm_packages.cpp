@@ -164,7 +164,13 @@ class RpmSession : public boost::noncopyable {
       if (rpmlogRecMessage(rec) != nullptr) {
         if (last_message != rpmlogRecMessage(rec)) {
           last_message = rpmlogRecMessage(rec);
-          logger->vlog(1, "RPM notice: " + last_message);
+          // Errors, such as a damaged database that ends the package list
+          // early, must be visible without verbose logging.
+          if (rpmlogRecPriority(rec) <= RPMLOG_ERR) {
+            logger->log(google::GLOG_WARNING, "RPM error: " + last_message);
+          } else {
+            logger->vlog(1, "RPM notice: " + last_message);
+          }
         }
       }
     } catch (const std::exception&) {
